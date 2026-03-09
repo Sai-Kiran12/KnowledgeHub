@@ -1,0 +1,48 @@
+from functools import lru_cache
+from pathlib import Path
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', extra='ignore')
+
+    app_name: str = 'Advanced RAG Chatbot API'
+    app_env: str = 'dev'
+    app_host: str = '0.0.0.0'
+    app_port: int = 8000
+
+    upload_dir: Path = Path('data/uploads')
+    max_upload_size_mb: int = 30
+
+    chunk_size: int = 900
+    chunk_overlap: int = 150
+
+    qdrant_url: str = 'http://qdrant:6333'
+    qdrant_api_key: str = Field(default='')
+    qdrant_collection: str = 'rag_chunks'
+    qdrant_image_collection: str = 'rag_image_chunks'
+
+    retrieval_top_k: int = 20
+    image_retrieval_top_k: int = 8
+    rerank_top_k: int = 5
+    query_expansion_count: int = 3
+
+    openai_api_key: str = Field(default='')
+    openai_base_url: str = Field(default='https://api.openai.com/v1')
+    openai_model: str = Field(default='gpt-5-mini-2025-08-07')
+    embedding_model: str = Field(default='text-embedding-3-large')
+    temperature: float = 0.1
+
+    clip_model_name: str = Field(default='clip-ViT-B-32')
+
+    cohere_api_key: str = Field(default='')
+    cohere_rerank_model: str = 'rerank-v3.5'
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    settings = Settings()
+    settings.upload_dir.mkdir(parents=True, exist_ok=True)
+    return settings

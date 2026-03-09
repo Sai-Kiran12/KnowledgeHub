@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.env
+backend/data/uploads/*
+backend/data/qdrant/*
+frontend/node_modules/
+frontend/dist/
+!.gitkeep
