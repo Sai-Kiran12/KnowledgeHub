@@ -132,6 +132,33 @@ body { background: #000; color: #fff; height: 100vh; overflow: hidden; }
   align-items: center;
   gap: 16px;
 }
+.headerActions {
+  display: flex;
+  gap: 12px;
+  margin-left: auto;
+}
+.headerBtn {
+  background: linear-gradient(135deg, #1a1a1a 0%, #151515 100%);
+  border: 1px solid #2a2a2a;
+  color: #fff;
+  padding: 8px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.2s;
+  box-shadow: var(--shadow-sm);
+}
+.headerBtn:hover {
+  background: linear-gradient(135deg, #222 0%, #1a1a1a 100%);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+.headerBtn.active {
+  background: linear-gradient(135deg, #fff 0%, #e0e0e0 100%);
+  color: #000;
+  border-color: #fff;
+}
 .menuBtn {
   background: #1a1a1a;
   border: 1px solid #2a2a2a;

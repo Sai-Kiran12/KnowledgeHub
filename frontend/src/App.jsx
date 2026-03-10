@@ -322,12 +322,6 @@ export default function App() {
         </div>
 
         <div className="sidebarFooter">
-          <button className={`navBtn ${page === 'index' ? 'active' : ''}`} onClick={() => setPage('index')}>
-            🌐 Upload Files
-          </button>
-          <button className={`navBtn ${page === 'files' ? 'active' : ''}`} onClick={() => setPage('files')}>
-            📂 My Files
-          </button>
           <div className="userInfo">
             <span>👤 {username}</span>
             <button onClick={logout} className="logoutBtn">Logout</button>
@@ -339,6 +333,14 @@ export default function App() {
         <header className="header">
           <button className="menuBtn" onClick={() => setSidebarOpen(!sidebarOpen)}>menu</button>
           <h1>✨ KnowledgeHub</h1>
+          <div className="headerActions">
+            <button className={`headerBtn ${page === 'index' ? 'active' : ''}`} onClick={() => setPage('index')}>
+              📤 Upload Files
+            </button>
+            <button className={`headerBtn ${page === 'files' ? 'active' : ''}`} onClick={() => setPage('files')}>
+              📂 My Files
+            </button>
+          </div>
         </header>
 
         {page === 'chat' ? (
