@@ -2,6 +2,10 @@ import { useMemo, useState, useRef, useEffect } from 'react';
 
 const API_BASE = '/api';
 const SUPPORTED = '.txt,.md,.pdf,.doc,.docx,.csv,.png,.jpg,.jpeg,.webp';
+const MAX_UPLOAD_SIZE_MB = 30;
+const IMAGE_MODELS = [
+  { value: 'gpt-5-mini', label: 'GPT-5 Mini' }
+];
 
 const EXAMPLE_QUESTIONS = [
   "What are the key points in the documents?",
@@ -42,6 +46,8 @@ function ChatMessage({ role, content, sources }) {
 }
 
 export default function App() {
+  const [token, setToken] = useState(localStorage.getItem('token'));
+  const [username, setUsername] = useState(localStorage.getItem('username') || '');
   const [page, setPage] = useState('chat');
   const [chats, setChats] = useState([{ id: 1, title: 'New Chat', messages: [] }]);
   const [activeChat, setActiveChat] = useState(1);
@@ -54,6 +60,15 @@ export default function App() {
   const [filesToIndex, setFilesToIndex] = useState([]);
   const [indexResult, setIndexResult] = useState([]);
   const [indexBusy, setIndexBusy] = useState(false);
+  const [selectedImageModel, setSelectedImageModel] = useState('gpt-5-mini');
+
+  const [userFiles, setUserFiles] = useState([]);
+  const [filesLoading, setFilesLoading] = useState(false);
+
+  const [loginUsername, setLoginUsername] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [isRegister, setIsRegister] = useState(false);
+  const [authError, setAuthError] = useState('');
 
   const currentChat = chats.find((c) => c.id === activeChat) || chats[0];
   const history = currentChat.messages;
@@ -62,6 +77,75 @@ export default function App() {
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [history]);
+
+  useEffect(() => {
+    if (token && page === 'files') {
+      loadUserFiles();
+    }
+  }, [token, page]);
+
+  function logout() {
+    localStorage.removeItem('token');
+    localStorage.removeItem('username');
+    setToken(null);
+    setUsername('');
+    setChats([{ id: 1, title: 'New Chat', messages: [] }]);
+    setActiveChat(1);
+  }
+
+  async function handleAuth() {
+    setAuthError('');
+    const endpoint = isRegister ? '/register' : '/login';
+    try {
+      const res = await fetch(`${API_BASE}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: loginUsername, password: loginPassword }),
+      });
+      const data = await readApiResponse(res);
+      if (!res.ok) throw new Error(data.detail || 'Authentication failed');
+      
+      localStorage.setItem('token', data.access_token);
+      localStorage.setItem('username', data.username);
+      setToken(data.access_token);
+      setUsername(data.username);
+      setLoginUsername('');
+      setLoginPassword('');
+    } catch (err) {
+      setAuthError(String(err.message || err));
+    }
+  }
+
+  async function loadUserFiles() {
+    setFilesLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/files`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await readApiResponse(res);
+      if (!res.ok) throw new Error(data.detail || 'Failed to load files');
+      setUserFiles(data);
+    } catch (err) {
+      console.error('Failed to load files:', err);
+    } finally {
+      setFilesLoading(false);
+    }
+  }
+
+  async function deleteUserFile(fileId) {
+    if (!confirm('Delete this file and all its vectors?')) return;
+    try {
+      const res = await fetch(`${API_BASE}/files/${fileId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await readApiResponse(res);
+      if (!res.ok) throw new Error(data.detail || 'Failed to delete');
+      setUserFiles((prev) => prev.filter((f) => f.id !== fileId));
+    } catch (err) {
+      alert(`Error: ${err.message || err}`);
+    }
+  }
 
   function newChat() {
     const newId = Math.max(...chats.map((c) => c.id)) + 1;
@@ -81,7 +165,11 @@ export default function App() {
     void idx;
     const fd = new FormData();
     fd.append('file', f);
-    const res = await fetch(`${API_BASE}/upload`, { method: 'POST', body: fd });
+    const res = await fetch(`${API_BASE}/upload`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: fd,
+    });
     const data = await readApiResponse(res);
     if (!res.ok) throw new Error(data.detail || 'Upload failed');
     return data;
@@ -136,7 +224,11 @@ export default function App() {
         fd.append('file', file);
       }
 
-      const res = await fetch(`${API_BASE}/chat`, { method: 'POST', body: fd });
+      const res = await fetch(`${API_BASE}/chat`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: fd,
+      });
       const data = await readApiResponse(res);
       if (!res.ok) throw new Error(data.detail || 'Failed');
 
@@ -159,6 +251,42 @@ export default function App() {
     } finally {
       setBusy(false);
     }
+  }
+
+  if (!token) {
+    return (
+      <div className="loginPage">
+        <div className="loginCard">
+          <h1>✨ KnowledgeHub</h1>
+          <p>{isRegister ? 'Create your account' : 'Sign in to continue'}</p>
+          
+          {authError && <div className="authError">{authError}</div>}
+          
+          <input
+            type="text"
+            placeholder="Username"
+            value={loginUsername}
+            onChange={(e) => setLoginUsername(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleAuth()}
+          />
+          <input
+            type="password"
+            placeholder="Password"
+            value={loginPassword}
+            onChange={(e) => setLoginPassword(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleAuth()}
+          />
+          
+          <button onClick={handleAuth} className="authBtn">
+            {isRegister ? 'Register' : 'Login'}
+          </button>
+          
+          <button onClick={() => setIsRegister(!isRegister)} className="toggleAuthBtn">
+            {isRegister ? 'Already have an account? Login' : "Don't have an account? Register"}
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -195,8 +323,15 @@ export default function App() {
 
         <div className="sidebarFooter">
           <button className={`navBtn ${page === 'index' ? 'active' : ''}`} onClick={() => setPage('index')}>
-            📁 Index Files
+            🌐 Upload Files
           </button>
+          <button className={`navBtn ${page === 'files' ? 'active' : ''}`} onClick={() => setPage('files')}>
+            📂 My Files
+          </button>
+          <div className="userInfo">
+            <span>👤 {username}</span>
+            <button onClick={logout} className="logoutBtn">Logout</button>
+          </div>
         </div>
       </aside>
 
@@ -248,6 +383,16 @@ export default function App() {
                   📎
                   <input type="file" accept={SUPPORTED} onChange={(e) => setFile(e.target.files?.[0] || null)} style={{ display: 'none' }} />
                 </label>
+                <select 
+                  value={selectedImageModel} 
+                  onChange={(e) => setSelectedImageModel(e.target.value)}
+                  className="imageModelSelect"
+                  title="Image Model"
+                >
+                  {IMAGE_MODELS.map(model => (
+                    <option key={model.value} value={model.value}>{model.label}</option>
+                  ))}
+                </select>
                 <textarea
                   rows={1}
                   placeholder="Type your message..."
@@ -264,12 +409,13 @@ export default function App() {
               </div>
             </div>
           </>
-        ) : (
+        ) : page === 'index' ? (
           <div className="indexPage">
             <button className="closeBtn" onClick={() => setPage('chat')}>✕</button>
             <div className="indexCard">
-              <h2>📁 Index Files</h2>
-              <p>Upload files to add them to vector index. Tags are auto-generated.</p>
+              <h2>📤 Upload Files</h2>
+              <p>Upload files to add them to your vector index. Tags are auto-generated.</p>
+              <p className="uploadInfo">Max upload size: {MAX_UPLOAD_SIZE_MB}MB per file</p>
 
               <input type="file" multiple accept={SUPPORTED} onChange={(e) => setFilesToIndex(Array.from(e.target.files || []))} className="fileInput" />
 
@@ -294,8 +440,39 @@ export default function App() {
               ) : null}
             </div>
           </div>
+        ) : (
+          <div className="filesPage">
+            <button className="closeBtn" onClick={() => setPage('chat')}>✕</button>
+            <div className="filesCard">
+              <h2>📂 My Files</h2>
+              <p>Manage your uploaded files and their vectors</p>
+
+              {filesLoading ? (
+                <div className="loading">Loading...</div>
+              ) : userFiles.length === 0 ? (
+                <div className="emptyFiles">No files uploaded yet</div>
+              ) : (
+                <div className="filesTable">
+                  {userFiles.map((f) => (
+                    <div key={f.id} className="fileRow">
+                      <div className="fileInfo">
+                        <div className="fileName">{f.filename}</div>
+                        <div className="fileMeta">
+                          {f.file_type} • {f.chunks_indexed} chunks • {new Date(f.uploaded_at).toLocaleDateString()}
+                        </div>
+                      </div>
+                      <button onClick={() => deleteUserFile(f.id)} className="deleteFileBtn">
+                        🗑️ Delete
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
         )}
       </main>
     </div>
   );
 }
+

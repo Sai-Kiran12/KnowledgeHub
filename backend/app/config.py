@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     cohere_api_key: str = Field(default='')
     cohere_rerank_model: str = 'rerank-v3.5'
 
+    jwt_secret_key: str = Field(default='change-this-secret-key-in-production')
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

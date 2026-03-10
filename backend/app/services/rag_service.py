@@ -618,3 +618,43 @@ class RagService:
         if file_path is not None:
             return self.ask_with_file(question=question, file_path=file_path, top_k=top_k, history=history, filters=filters)
         return self.ask(question=question, top_k=top_k, history=history, filters=filters)
+
+    def delete_by_doc_id(self, doc_id: str) -> int:
+        """Delete all vectors associated with a doc_id from both collections."""
+        logger.info('Delete by doc_id started doc_id=%s', doc_id)
+        deleted_count = 0
+        
+        # Delete from text collection
+        try:
+            self.qdrant_client.delete(
+                collection_name=self.settings.qdrant_collection,
+                points_selector=qmodels.FilterSelector(
+                    filter=qmodels.Filter(
+                        must=[qmodels.FieldCondition(key='doc_id', match=qmodels.MatchValue(value=doc_id))]
+                    )
+                ),
+                wait=True,
+            )
+            deleted_count += 1
+            logger.info('Deleted from text collection doc_id=%s', doc_id)
+        except Exception as exc:
+            logger.warning('Failed to delete from text collection doc_id=%s error=%s', doc_id, exc)
+        
+        # Delete from image collection
+        try:
+            self.qdrant_client.delete(
+                collection_name=self.settings.qdrant_image_collection,
+                points_selector=qmodels.FilterSelector(
+                    filter=qmodels.Filter(
+                        must=[qmodels.FieldCondition(key='doc_id', match=qmodels.MatchValue(value=doc_id))]
+                    )
+                ),
+                wait=True,
+            )
+            deleted_count += 1
+            logger.info('Deleted from image collection doc_id=%s', doc_id)
+        except Exception as exc:
+            logger.warning('Failed to delete from image collection doc_id=%s error=%s', doc_id, exc)
+        
+        logger.info('Delete by doc_id completed doc_id=%s collections=%s', doc_id, deleted_count)
+        return deleted_count

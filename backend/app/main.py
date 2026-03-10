@@ -6,13 +6,17 @@ from pathlib import Path
 from time import perf_counter
 from uuid import uuid4
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.logging_config import setup_logging
-from app.schemas import AskRequest, AskResponse, AskWithFileResponse, ChatResponse, HealthResponse, UploadResponse
+from app.schemas import (
+    AskRequest, AskResponse, AskWithFileResponse, ChatResponse, HealthResponse, UploadResponse,
+    RegisterRequest, LoginRequest, AuthResponse, FileRecord, DeleteFileResponse
+)
 from app.services.document_loader import SUPPORTED_EXTENSIONS
+from app import database, auth
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -41,6 +45,7 @@ def get_rag_service():
 def warmup_on_startup() -> None:
     start = perf_counter()
     logger.info('Startup warmup started')
+    database.init_db()
     get_rag_service()
     elapsed_ms = int((perf_counter() - start) * 1000)
     logger.info('Startup warmup completed elapsed_ms=%s', elapsed_ms)
@@ -52,9 +57,46 @@ def health() -> HealthResponse:
     return HealthResponse(status='ok')
 
 
+def get_current_user(authorization: str = Header(None)):
+    if not authorization or not authorization.startswith('Bearer '):
+        raise HTTPException(status_code=401, detail='Missing or invalid token')
+    token = authorization.split(' ')[1]
+    payload = auth.decode_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail='Invalid token')
+    user_id = payload.get('user_id')
+    username = payload.get('username')
+    if not user_id or not username:
+        raise HTTPException(status_code=401, detail='Invalid token payload')
+    return {'user_id': user_id, 'username': username}
+
+
+@app.post('/register', response_model=AuthResponse)
+def register(req: RegisterRequest) -> AuthResponse:
+    existing = database.get_user_by_username(req.username)
+    if existing:
+        raise HTTPException(status_code=400, detail='Username already exists')
+    password_hash = auth.hash_password(req.password)
+    user_id = database.create_user(req.username, password_hash)
+    token = auth.create_access_token({'user_id': user_id, 'username': req.username})
+    logger.info('User registered user_id=%s username=%s', user_id, req.username)
+    return AuthResponse(access_token=token, user_id=user_id, username=req.username)
+
+
+@app.post('/login', response_model=AuthResponse)
+def login(req: LoginRequest) -> AuthResponse:
+    user = database.get_user_by_username(req.username)
+    if not user or not auth.verify_password(req.password, user['password_hash']):
+        raise HTTPException(status_code=401, detail='Invalid credentials')
+    token = auth.create_access_token({'user_id': user['id'], 'username': user['username']})
+    logger.info('User logged in user_id=%s username=%s', user['id'], user['username'])
+    return AuthResponse(access_token=token, user_id=user['id'], username=user['username'])
+
+
 @app.post('/upload', response_model=UploadResponse)
 async def upload(
     file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
 ) -> UploadResponse:
     start = perf_counter()
     if not file.filename:
@@ -70,20 +112,22 @@ async def upload(
         )
 
     payload = await file.read()
-    logger.info('Upload received filename=%s bytes=%s', file.filename, len(payload))
+    logger.info('Upload received filename=%s bytes=%s user_id=%s', file.filename, len(payload), current_user['user_id'])
     max_bytes = settings.max_upload_size_mb * 1024 * 1024
     if len(payload) > max_bytes:
         logger.warning('Upload rejected: file too large filename=%s bytes=%s max=%s', file.filename, len(payload), max_bytes)
         raise HTTPException(status_code=413, detail='File too large.')
 
-    output_path = settings.upload_dir / file.filename
+    resolved_doc_id = uuid4().hex
+    user_upload_dir = settings.upload_dir / str(current_user['user_id'])
+    user_upload_dir.mkdir(parents=True, exist_ok=True)
+    output_path = user_upload_dir / f"{resolved_doc_id}_{file.filename}"
     output_path.write_bytes(payload)
     logger.info('Upload saved path=%s', output_path)
 
-    resolved_doc_id = uuid4().hex
     metadata = {
         'doc_id': resolved_doc_id,
-        'owner_id': None,
+        'owner_id': str(current_user['user_id']),
         'tenant_id': None,
         'tags': [],
         'uploaded_at': datetime.now(timezone.utc).isoformat(),
@@ -92,20 +136,30 @@ async def upload(
         'page_no': None,
     }
     indexed = get_rag_service().ingest_file(output_path, metadata=metadata, raw_bytes=payload)
+    database.create_file_record(
+        user_id=current_user['user_id'],
+        doc_id=resolved_doc_id,
+        filename=file.filename,
+        file_path=str(output_path),
+        file_type=ext.lstrip('.'),
+        chunks=indexed,
+    )
     elapsed_ms = int((perf_counter() - start) * 1000)
     logger.info('Upload indexed filename=%s chunks=%s elapsed_ms=%s', file.filename, indexed, elapsed_ms)
     return UploadResponse(filename=file.filename, chunks_indexed=indexed, doc_id=resolved_doc_id)
 
 
 @app.post('/ask', response_model=AskResponse)
-def ask(req: AskRequest) -> AskResponse:
+def ask(req: AskRequest, current_user: dict = Depends(get_current_user)) -> AskResponse:
     start = perf_counter()
-    logger.info('Ask requested question_len=%s top_k=%s history_turns=%s', len(req.question), req.top_k, len(req.history))
+    logger.info('Ask requested question_len=%s top_k=%s history_turns=%s user_id=%s', len(req.question), req.top_k, len(req.history), current_user['user_id'])
+    filters = req.filters.model_dump(exclude_none=True) if req.filters else {}
+    filters['owner_id'] = str(current_user['user_id'])
     answer, sources = get_rag_service().ask(
         req.question,
         top_k=req.top_k,
         history=req.history,
-        filters=req.filters.model_dump(exclude_none=True) if req.filters else None,
+        filters=filters,
     )
     elapsed_ms = int((perf_counter() - start) * 1000)
     logger.info('Ask completed sources=%s elapsed_ms=%s', len(sources), elapsed_ms)
@@ -173,10 +227,11 @@ async def chat(
     history_json: str | None = Form(default=None),
     filters_json: str | None = Form(default=None),
     file: UploadFile | None = File(default=None),
+    current_user: dict = Depends(get_current_user),
 ) -> ChatResponse:
     start = perf_counter()
     history = []
-    filters = None
+    filters = {}
     if history_json:
         try:
             history = json.loads(history_json)
@@ -186,7 +241,9 @@ async def chat(
         try:
             filters = json.loads(filters_json)
         except json.JSONDecodeError:
-            filters = None
+            filters = {}
+    
+    filters['owner_id'] = str(current_user['user_id'])
 
     file_path = None
     if file is not None and file.filename:
@@ -214,3 +271,31 @@ async def chat(
     elapsed_ms = int((perf_counter() - start) * 1000)
     logger.info('Chat completed sources=%s elapsed_ms=%s', len(sources), elapsed_ms)
     return ChatResponse(answer=answer, sources=sources)
+
+
+@app.get('/files', response_model=list[FileRecord])
+def get_files(current_user: dict = Depends(get_current_user)) -> list[FileRecord]:
+    files = database.get_user_files(current_user['user_id'])
+    return [FileRecord(**f) for f in files]
+
+
+@app.delete('/files/{file_id}', response_model=DeleteFileResponse)
+def delete_file(file_id: int, current_user: dict = Depends(get_current_user)) -> DeleteFileResponse:
+    file_record = database.delete_file_record(file_id, current_user['user_id'])
+    if not file_record:
+        raise HTTPException(status_code=404, detail='File not found')
+    
+    # Delete from vector store
+    get_rag_service().delete_by_doc_id(file_record['doc_id'])
+    
+    # Delete physical file
+    try:
+        file_path = Path(file_record['file_path'])
+        if file_path.exists():
+            file_path.unlink()
+            logger.info('Physical file deleted path=%s', file_path)
+    except Exception as exc:
+        logger.warning('Failed to delete physical file path=%s error=%s', file_record['file_path'], exc)
+    
+    logger.info('File deleted file_id=%s doc_id=%s user_id=%s', file_id, file_record['doc_id'], current_user['user_id'])
+    return DeleteFileResponse(success=True, message='File and vectors deleted successfully')

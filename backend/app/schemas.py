@@ -43,3 +43,34 @@ class UploadResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
+
+
+class RegisterRequest(BaseModel):
+    username: str = Field(min_length=3)
+    password: str = Field(min_length=6)
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class AuthResponse(BaseModel):
+    access_token: str
+    token_type: str = 'bearer'
+    user_id: int
+    username: str
+
+
+class FileRecord(BaseModel):
+    id: int
+    doc_id: str
+    filename: str
+    file_type: str
+    chunks_indexed: int
+    uploaded_at: str
+
+
+class DeleteFileResponse(BaseModel):
+    success: bool
+    message: str
